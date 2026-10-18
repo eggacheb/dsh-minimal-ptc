@@ -331,10 +331,41 @@ export function apply(ctx, config) {
           running.terminate()
           return true
         },
+        // dsh 0.2.1-rc.2's official `tool-bash` uses the `execute() -> handle -> result()`
+        // contract, while this executor only implemented the earlier `resolve` / `start`
+        // shape. The handle therefore has to expose the result DTO, the non-consuming
+        // observed streams used by background jobs, and the settled sandbox facts.
+        observed: {
+          stdout: { readFrom: fromByte => collected.stdout.readFrom(fromByte) },
+          stderr: { readFrom: fromByte => collected.stderr.readFrom(fromByte) },
+        },
+        get sandbox() {
+          return mode === undefined ? undefined : { mode, denied: false }
+        },
+        result: async () => {
+          await proc.done
+          if (spawnFailureNote !== undefined) throw new Error(spawnFailureNote)
+          const timedOut = fused.timedOut()
+          return {
+            exitCode: proc.exitCode ?? 0,
+            signal: proc.signal ?? null,
+            timedOut,
+            aborted: spec.signal?.aborted === true && !timedOut,
+            timeoutMs: spec.timeoutMs,
+            stdout: finalOutput(collected.stdout),
+            stderr: finalOutput(collected.stderr),
+            ...mode === undefined ? {} : { sandbox: { mode, denied: false } },
+          }
+        },
       }
       return proc
     },
   }
+
+  // Foreground: `const result = await (await ctx.shell.execute(spec)).result()`.
+  // Background: `const proc = await ctx.shell.execute({ ...spec, signal })`, then
+  // `proc.observed` / `proc.done` / `proc.kill()`.
+  executor.execute = async spec => executor.start(spec)
 
   ctx.provide('shell', executor)
 }

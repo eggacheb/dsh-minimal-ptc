@@ -65,3 +65,41 @@ test('resolveConfig rejects invalid timer values', () => {
   assert.throws(() => resolveConfig({ timeoutMs: 0 }, {}), /positive/)
   assert.throws(() => resolveConfig({ maxTimeoutMs: 999999999999 }, {}), /no greater than/)
 })
+
+test('execute() exposes the rc.2 shell contract the official bash tool calls', async () => {
+  let providedShell
+  const fakeHandle = {
+    done: Promise.resolve({ exitCode: 0, signal: null }),
+    collected: {
+      stdout: { readFrom: (offset) => ({ text: 'hi\n'.slice(offset), nextOffset: 3, lossy: false }) },
+      stderr: { readFrom: () => ({ text: '', nextOffset: 0, lossy: false }) },
+    },
+    terminate: () => {},
+  }
+  const ctx = {
+    get(name) {
+      if (name === 'subprocess') return { spawn: () => fakeHandle }
+      if (name === 'sandboxPolicy') return { defaultMode: 'danger-full-access', resolve: () => ({ mode: 'danger-full-access' }) }
+      return undefined
+    },
+    provide(_name, shell) { providedShell = shell },
+  }
+  apply(ctx, { shellPath: process.execPath, timeoutMs: 5000, maxTimeoutMs: 5000, graceMs: 10 })
+
+  assert.equal(typeof providedShell.execute, 'function')
+  const spec = providedShell.resolve({ command: 'echo hi' })
+  const handle = await providedShell.execute(spec)
+
+  assert.equal(typeof handle.result, 'function')
+  assert.deepEqual(Object.keys(handle.observed), ['stdout', 'stderr'])
+  assert.equal(handle.observed.stdout.readFrom(0).text, 'hi\n')
+  assert.deepEqual(handle.sandbox, { mode: 'danger-full-access', denied: false })
+
+  const result = await handle.result()
+  assert.equal(result.exitCode, 0)
+  assert.equal(result.timedOut, false)
+  assert.equal(result.aborted, false)
+  assert.equal(result.stdout.text, 'hi\n')
+  assert.equal(result.stderr.text, '')
+  assert.deepEqual(result.sandbox, { mode: 'danger-full-access', denied: false })
+})
